@@ -20,6 +20,9 @@ finding goes into the report's `findings` array with `severity`, `unit`,
   units in pull request mode; in full coverage mode review every unit you
   wrote tests for.
 - At most eight findings; order by severity. One finding per root cause.
+- State facts you checked, not guesses: when a module gains a variable,
+  `grep` the stacks that call the module and say whether they pass it. A
+  finding that says "I did not check" is not a finding.
 
 ## Checklist (see `reference/checklist.md` for details and examples)
 

@@ -9,12 +9,16 @@
 #   --status TEXT     agent step status: success | failure | skipped | cancelled
 #   --run-url URL     link to the workflow run
 #   --head SHA        commit the results refer to
+#   --marker NAME     marker id (default tf-test-agent-report). CI uses a second
+#                     marker, tf-test-agent-verify, for runs in which the agent
+#                     was skipped, so the agent's report is not overwritten by
+#                     the verification of its own commit.
 #
 # The comment starts with a hidden marker so post-comment.sh can update it in
 # place instead of adding a new comment on every push.
 set -euo pipefail
 
-MARKER="<!-- tf-test-agent-report -->"
+marker_name="tf-test-agent-report"
 report="" verify="" guard="" status="unknown" run_url="" head=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -24,13 +28,18 @@ while [[ $# -gt 0 ]]; do
     --status) shift; status="$1" ;;
     --run-url) shift; run_url="$1" ;;
     --head) shift; head="$1" ;;
+    --marker) shift; marker_name="$1" ;;
     *) echo "render-report.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
 done
 
-echo "$MARKER"
-echo "## 🧪 Terraform test agent"
+echo "<!-- ${marker_name} -->"
+if [[ "$status" == "skipped" ]]; then
+  echo "## 🧪 Terraform test agent — verification only"
+else
+  echo "## 🧪 Terraform test agent"
+fi
 echo
 [[ -n "$head" ]] && echo "Results for commit \`${head:0:7}\`. "
 [[ -n "$run_url" ]] && echo "[Workflow run]($run_url)"

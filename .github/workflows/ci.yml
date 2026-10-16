@@ -1,0 +1,96 @@
+# Repository CI: the tooling that the agent relies on is itself tested on
+# every pull request, and the Terraform code is verified without an LLM.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: "1.16.6"
+  TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
+  ACTIONLINT_VERSION: "1.7.11"
+  BATS_VERSION: "1.13.0"
+
+jobs:
+  scripts:
+    name: scripts (shellcheck + bats)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      - name: shellcheck
+        run: shellcheck -S style scripts/*.sh tests/scripts/helpers.bash
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "22"
+
+      - name: bats
+        run: |
+          npm install -g "bats@${BATS_VERSION}"
+          bats --formatter tap tests/scripts
+
+  workflows:
+    name: workflows (actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          base="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
+          curl -sSL -o actionlint.tgz "${base}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSL -o checksums.txt "${base}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          grep "actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" checksums.txt | sha256sum -c -
+          tar -xzf actionlint.tgz actionlint
+          ./actionlint -no-color
+
+  terraform:
+    name: terraform (fmt + validate + test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-plugins-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-plugins-${{ runner.os }}-
+
+      - name: verify every unit
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          scripts/verify.sh --out verify-out || status=$?
+          cat verify-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit "${status:-0}"
+
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: ci-verify-results
+          path: verify-out/
+          retention-days: 14

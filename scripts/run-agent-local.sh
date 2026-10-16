@@ -8,6 +8,9 @@
 #   scripts/run-agent-local.sh --interactive   # open an interactive session instead of -p
 #
 # Requires the Claude Code CLI (`claude`) authenticated, Terraform and jq.
+# Run `claude` interactively in this directory once and accept the workspace
+# trust dialog; until then Claude Code ignores .claude/settings.json allow
+# rules (the explicit --allowedTools below still apply).
 # Headless runs write the structured report to .tf-test-agent/report.json and
 # the full transcript to .tf-test-agent/run.json. Nothing is pushed.
 set -euo pipefail
