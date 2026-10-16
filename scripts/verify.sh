@@ -130,4 +130,15 @@ jq -n --argjson results "$results" --argjson ok "$([[ $overall -eq 0 ]] && echo 
 } > "$out_dir/summary.md"
 
 cat "$out_dir/summary.md"
+
+# Inside GitHub Actions, surface the tail of every failing log as an error
+# annotation, so the cause is visible on the pull request without opening
+# the raw logs.
+if [[ $overall -ne 0 && "${GITHUB_ACTIONS:-}" == "true" ]]; then
+  jq -r '.results[] | select(.status == "fail") | .unit + "\t" + .step' "$out_dir/summary.json" |
+    while IFS=$'\t' read -r unit step; do
+      tail_text="$(tail -n 25 "$out_dir/${unit//\//_}.log" | sed 's/%/%25/g' | tr -d '\r' | sed ':a;N;$!ba;s/\n/%0A/g')"
+      echo "::error title=${step} failed for ${unit}::${tail_text}"
+    done
+fi
 exit $overall
