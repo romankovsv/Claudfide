@@ -1,0 +1,276 @@
+# Terraform test agent — runs on pull requests that change Terraform code.
+#
+# Jobs:
+#   agent   the custom Claude Code agent analyses the change, writes/updates
+#           tests, runs them through scripts/tf.sh, commits only green test
+#           files to the PR branch and returns a structured report.
+#           This is the only job that sees the Anthropic API key.
+#   verify  no LLM, no secrets: fmt / validate / terraform test for every unit
+#           on the branch tip, i.e. including whatever the agent committed.
+#   guard   fails when the agent's commits touched anything but
+#           **/tests/*.tftest.hcl.
+#   report  assembles verify + guard + the agent's report into one sticky
+#           PR comment, also when the agent failed, timed out or was skipped.
+#
+# Loop prevention: the agent's own push (claude[bot]) re-triggers this
+# workflow; the agent job is skipped for bot actors and the action itself
+# rejects bot triggers, so only verify/guard/report run on that commit.
+# Concurrency queues runs per PR instead of cancelling, so a report is never
+# lost between the agent's push and the comment.
+name: Terraform test agent
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "modules/**"
+      - "stacks/**"
+
+concurrency:
+  group: tf-test-agent-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  TERRAFORM_VERSION: "1.16.6"
+  TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
+
+jobs:
+  agent:
+    name: agent
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.actor != 'claude[bot]' &&
+      github.triggering_actor != 'claude[bot]' &&
+      !contains(github.event.pull_request.labels.*.name, 'tf-tests:skip')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write        # push test commits to the PR branch
+      pull-requests: write   # the action's GitHub tooling
+      issues: write
+      id-token: write        # Claude GitHub App token exchange
+    env:
+      # Claude Code scrubs Anthropic/GitHub/cloud secrets from the environment
+      # of every subprocess it starts (terraform, git). scripts/tf.sh adds a
+      # second, independent layer with `env -i`.
+      CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+    outputs:
+      outcome: ${{ steps.claude.outcome }}
+      head_before: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Check out the pull request branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Cache provider plugins
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-plugins-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-plugins-${{ runner.os }}-
+
+      - name: Initialise every unit (providers downloaded before the agent starts)
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          for unit in modules/*/ stacks/*/; do
+            unit="${unit%/}"
+            ls "$unit"/*.tf > /dev/null 2>&1 || continue
+            scripts/tf.sh init "$unit"
+          done
+
+      - name: Build the agent prompt and arguments
+        id: prompt
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          prompt="$(scripts/agent-prompt.sh --mode pr --base "origin/${BASE_REF}" --head HEAD --pr "$PR_NUMBER" --repo "$REPO" --ci)"
+          {
+            echo "prompt<<__TF_TEST_AGENT_PROMPT__"
+            printf '%s\n' "$prompt"
+            echo "__TF_TEST_AGENT_PROMPT__"
+            echo "schema=$(jq -c . scripts/report.schema.json)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run the tf-test-engineer agent
+        id: claude
+        continue-on-error: true
+        uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1.0.251
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: ${{ steps.prompt.outputs.prompt }}
+          # --agent: the whole session runs as the custom agent (its model, its
+          # preloaded skills, its tool denials). The allow-list below is the
+          # permission layer: file tools, the Terraform wrapper, git for the
+          # commit. No raw terraform, no network tools, no gh.
+          claude_args: |
+            --agent tf-test-engineer
+            --max-turns 120
+            --max-budget-usd 6
+            --json-schema '${{ steps.prompt.outputs.schema }}'
+            --allowedTools "Read,Grep,Glob,Edit,Write,Skill,Bash(scripts/tf.sh:*),Bash(scripts/changed-modules.sh:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
+
+      - name: Save the agent's structured report
+        if: always()
+        env:
+          REPORT: ${{ steps.claude.outputs.structured_output }}
+          OUTCOME: ${{ steps.claude.outcome }}
+        run: |
+          mkdir -p agent-out
+          printf '%s' "$REPORT" > agent-out/report.json
+          echo "$OUTCOME" > agent-out/outcome.txt
+          if jq -e . agent-out/report.json > /dev/null 2>&1; then
+            jq -r '"decision: " + .decision + "\n" + .summary' agent-out/report.json
+          else
+            echo "::warning::the agent did not return a structured report (outcome: $OUTCOME)"
+          fi
+
+      - name: Upload the agent report
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: agent-report
+          path: agent-out/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Fail the job when the agent did not finish cleanly
+        if: steps.claude.outcome != 'success'
+        run: |
+          echo "::error::agent step outcome: ${{ steps.claude.outcome }}"
+          exit 1
+
+  verify:
+    name: verify
+    needs: agent
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      head: ${{ steps.verify.outputs.head }}
+    steps:
+      - name: Check out the branch tip (includes the agent's commit, if any)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 1
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: Cache provider plugins
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.TF_PLUGIN_CACHE_DIR }}
+          key: tf-plugins-${{ runner.os }}-${{ hashFiles('**/.terraform.lock.hcl') }}
+          restore-keys: tf-plugins-${{ runner.os }}-
+
+      - name: fmt, validate and terraform test for every unit
+        id: verify
+        run: |
+          mkdir -p "$TF_PLUGIN_CACHE_DIR"
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          scripts/verify.sh --out verify-out || status=$?
+          cat verify-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          exit "${status:-0}"
+
+      - name: Upload verification results
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verify-results
+          path: verify-out/
+          retention-days: 30
+
+  guard:
+    name: guard
+    needs: agent
+    if: always() && needs.agent.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Check out with history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Only test files may have changed since the PR head
+        env:
+          BEFORE: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p guard-out
+          scripts/guard-agent-diff.sh "$BEFORE" "$(git rev-parse HEAD)" 2>&1 | tee guard-out/guard.txt
+          exit "${PIPESTATUS[0]}"
+
+      - name: Upload guard output
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: guard-output
+          path: guard-out/
+          retention-days: 30
+
+  report:
+    name: report
+    needs: [agent, verify, guard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Check out the scripts
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+          sparse-checkout: scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Download artifacts
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          path: artifacts
+        continue-on-error: true
+
+      - name: Render and post the sticky comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          AGENT_OUTCOME: ${{ needs.agent.outputs.outcome }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD: ${{ needs.verify.outputs.head }}
+        run: |
+          case "$AGENT_RESULT" in
+            skipped) status="skipped"; marker="tf-test-agent-verify" ;;
+            cancelled) status="cancelled"; marker="tf-test-agent-report" ;;
+            *) status="${AGENT_OUTCOME:-$AGENT_RESULT}"; marker="tf-test-agent-report" ;;
+          esac
+          args=(--status "$status" --marker "$marker" --run-url "$RUN_URL" --head "${HEAD:-}")
+          [[ -s artifacts/agent-report/report.json ]] && args+=(--report artifacts/agent-report/report.json)
+          [[ -s artifacts/verify-results/summary.md ]] && args+=(--verify artifacts/verify-results/summary.md)
+          [[ -s artifacts/guard-output/guard.txt ]] && args+=(--guard artifacts/guard-output/guard.txt)
+          scripts/render-report.sh "${args[@]}" > comment.md
+          cat comment.md >> "$GITHUB_STEP_SUMMARY"
+          scripts/post-comment.sh "$REPO" "$PR_NUMBER" comment.md
