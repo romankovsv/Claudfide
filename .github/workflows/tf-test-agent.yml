@@ -109,8 +109,8 @@ jobs:
             echo "prompt<<__TF_TEST_AGENT_PROMPT__"
             printf '%s\n' "$prompt"
             echo "__TF_TEST_AGENT_PROMPT__"
-            echo "schema=$(jq -c . scripts/report.schema.json)"
           } >> "$GITHUB_OUTPUT"
+          mkdir -p agent-out
 
       - name: Run the tf-test-engineer agent
         id: claude
@@ -127,22 +127,28 @@ jobs:
             --agent tf-test-engineer
             --max-turns 120
             --max-budget-usd 6
-            --json-schema '${{ steps.prompt.outputs.schema }}'
             --allowedTools "Read,Grep,Glob,Edit,Write,Skill,Bash(scripts/tf.sh:*),Bash(scripts/changed-modules.sh:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
 
-      - name: Save the agent's structured report
+      - name: Validate the agent's report and summarise the transcript
+        id: report
         if: always()
         env:
-          REPORT: ${{ steps.claude.outputs.structured_output }}
           OUTCOME: ${{ steps.claude.outcome }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           mkdir -p agent-out
-          printf '%s' "$REPORT" > agent-out/report.json
           echo "$OUTCOME" > agent-out/outcome.txt
-          if jq -e . agent-out/report.json > /dev/null 2>&1; then
+          if [[ -n "$EXECUTION_FILE" && -s "$EXECUTION_FILE" ]]; then
+            scripts/transcript-summary.sh "$EXECUTION_FILE" > agent-out/transcript.md || true
+            cat agent-out/transcript.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [[ -s agent-out/report.json ]] && python3 scripts/validate-report.py agent-out/report.json; then
+            echo "valid=true" >> "$GITHUB_OUTPUT"
             jq -r '"decision: " + .decision + "\n" + .summary' agent-out/report.json
           else
-            echo "::warning::the agent did not return a structured report (outcome: $OUTCOME)"
+            echo "valid=false" >> "$GITHUB_OUTPUT"
+            rm -f agent-out/report.json
+            echo "::warning::the agent did not leave a valid agent-out/report.json (outcome: $OUTCOME)"
           fi
 
       - name: Upload the agent report
@@ -155,9 +161,9 @@ jobs:
           retention-days: 30
 
       - name: Fail the job when the agent did not finish cleanly
-        if: steps.claude.outcome != 'success'
+        if: steps.claude.outcome != 'success' || steps.report.outputs.valid != 'true'
         run: |
-          echo "::error::agent step outcome: ${{ steps.claude.outcome }}"
+          echo "::error::agent step outcome: ${{ steps.claude.outcome }}, valid report: ${{ steps.report.outputs.valid }}"
           exit 1
 
   verify:
@@ -280,6 +286,10 @@ jobs:
           [[ -s artifacts/agent-report/report.json ]] && args+=(--report artifacts/agent-report/report.json)
           [[ -s artifacts/verify-results/summary.md ]] && args+=(--verify artifacts/verify-results/summary.md)
           [[ -s artifacts/guard-output/guard.txt ]] && args+=(--guard artifacts/guard-output/guard.txt)
+          # When the agent did not finish cleanly, show reviewers what it did.
+          if [[ "$status" != "success" && "$status" != "skipped" && -s artifacts/agent-report/transcript.md ]]; then
+            args+=(--transcript artifacts/agent-report/transcript.md)
+          fi
           scripts/render-report.sh "${args[@]}" > comment.md
           cat comment.md >> "$GITHUB_STEP_SUMMARY"
           scripts/post-comment.sh "$REPO" "$PR_NUMBER" comment.md

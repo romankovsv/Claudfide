@@ -9,6 +9,7 @@
 #   --status TEXT     agent step status: success | failure | skipped | cancelled
 #   --run-url URL     link to the workflow run
 #   --head SHA        commit the results refer to
+#   --transcript FILE markdown from scripts/transcript-summary.sh, shown collapsed
 #   --marker NAME     marker id (default tf-test-agent-report). CI uses a second
 #                     marker, tf-test-agent-verify, for runs in which the agent
 #                     was skipped, so the agent's report is not overwritten by
@@ -19,7 +20,7 @@
 set -euo pipefail
 
 marker_name="tf-test-agent-report"
-report="" verify="" guard="" status="unknown" run_url="" head=""
+report="" verify="" guard="" transcript="" status="unknown" run_url="" head=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --report) shift; report="$1" ;;
@@ -29,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --run-url) shift; run_url="$1" ;;
     --head) shift; head="$1" ;;
     --marker) shift; marker_name="$1" ;;
+    --transcript) shift; transcript="$1" ;;
     *) echo "render-report.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -110,5 +112,14 @@ if [[ -n "$guard" && -s "$guard" ]]; then
   echo '```'
   cat "$guard"
   echo '```'
+  echo "</details>"
+fi
+
+if [[ -n "$transcript" && -s "$transcript" ]]; then
+  echo
+  echo "<details><summary>What the agent did (transcript summary)</summary>"
+  echo
+  cat "$transcript"
+  echo
   echo "</details>"
 fi

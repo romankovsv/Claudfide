@@ -9,7 +9,7 @@ make_fixture_repo() {
   FIXTURE="$(mktemp -d "${BATS_TEST_TMPDIR}/fixture.XXXXXX")"
   export FIXTURE
   mkdir -p "$FIXTURE/scripts" "$FIXTURE/modules/alpha/tests" "$FIXTURE/modules/beta" "$FIXTURE/stacks/platform"
-  cp "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/scripts/*.json "$FIXTURE/scripts/"
+  cp "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/scripts/*.json "$REPO_ROOT"/scripts/*.py "$FIXTURE/scripts/"
   cat > "$FIXTURE/modules/alpha/main.tf" <<'EOF'
 resource "null_resource" "a" {}
 EOF
