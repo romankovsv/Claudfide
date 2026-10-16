@@ -26,6 +26,25 @@ run "account_is_locked_down_by_default" {
   }
 }
 
+run "keys_are_off_and_traffic_is_https_only" {
+  command = plan
+
+  assert {
+    condition     = azurerm_storage_account.this.shared_access_key_enabled == false
+    error_message = "Shared key access must be off; use Entra ID."
+  }
+
+  assert {
+    condition     = azurerm_storage_account.this.https_traffic_only_enabled == true
+    error_message = "Only HTTPS traffic may be accepted."
+  }
+
+  assert {
+    condition     = azurerm_storage_account.this.blob_properties[0].delete_retention_policy[0].days == 7
+    error_message = "Deleted blobs must be kept for 7 days."
+  }
+}
+
 run "creates_one_container_per_name" {
   command = plan
 
