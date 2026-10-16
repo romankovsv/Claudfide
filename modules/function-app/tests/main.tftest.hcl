@@ -56,6 +56,38 @@ run "build_revision_comes_from_the_data_source" {
   }
 }
 
+run "ftps_is_disabled_by_default" {
+  command = plan
+
+  assert {
+    condition     = azurerm_linux_function_app.this.site_config[0].ftps_state == "Disabled"
+    error_message = "FTP/FTPS deployment access must be disabled unless the caller opts in."
+  }
+}
+
+run "ftps_state_is_forwarded_to_the_app" {
+  command = plan
+
+  variables {
+    ftps_state = "FtpsOnly"
+  }
+
+  assert {
+    condition     = azurerm_linux_function_app.this.site_config[0].ftps_state == "FtpsOnly"
+    error_message = "The ftps_state variable must reach the site configuration."
+  }
+}
+
+run "rejects_unknown_ftps_state" {
+  command = plan
+
+  variables {
+    ftps_state = "PlainFtp"
+  }
+
+  expect_failures = [var.ftps_state]
+}
+
 run "service_plan_is_linux_with_the_asp_prefix" {
   command = plan
 
