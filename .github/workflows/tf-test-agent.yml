@@ -97,6 +97,25 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      - name: Preflight — the API key must authenticate and have credit
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+            echo "::error::secret ANTHROPIC_API_KEY is empty or not visible to this job (repository secret, not an environment secret?)"
+            exit 1
+          fi
+          echo "key: length ${#ANTHROPIC_API_KEY}, ends with …${ANTHROPIC_API_KEY: -4} (compare with Console → API keys)"
+          # One minimal request: proves authentication AND billing before the agent starts.
+          code="$(curl -sS -o resp.json -w '%{http_code}' https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" -H "anthropic-version: 2023-06-01" -H "content-type: application/json" \
+            -d '{"model":"claude-haiku-5-5","max_tokens":1,"messages":[{"role":"user","content":"ping"}]}')"
+          if [[ "$code" != "200" ]]; then
+            echo "::error title=Anthropic API preflight failed (HTTP $code)::$(jq -r '.error.type + ": " + .error.message' resp.json 2>/dev/null || cat resp.json)"
+            exit 1
+          fi
+          echo "preflight OK: HTTP 200 from the Messages API"
+
       - name: Build the agent prompt and arguments
         id: prompt
         env:
