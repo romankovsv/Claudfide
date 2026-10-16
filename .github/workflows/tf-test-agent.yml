@@ -119,13 +119,18 @@ jobs:
 
       - name: Install Claude Code behind a launcher that keeps API-key billing on the standard path
         # Workaround for an Anthropic billing-path problem, see SOLUTION.md
-        # ("Billing path of the GitHub Action"): with
-        # CLAUDE_CODE_ENTRYPOINT=claude-code-github-action, which the action
-        # sets for telemetry, the API answered "Credit balance is too low"
-        # (HTTP 400) for this organisation, while the same key, model and
-        # request succeeded without the variable. The launcher drops the
-        # variable before starting the real binary. Remove this step and the
+        # ("Billing path of the GitHub Action"): requests whose billing header
+        # says cc_entrypoint=claude-code-github-action were answered with
+        # HTTP 400 "Credit balance is too low" for this organisation, while the
+        # same key, model and request succeeded with any other entrypoint.
+        # Claude Code sets that entrypoint when CLAUDE_CODE_ENTRYPOINT or
+        # CLAUDE_CODE_ACTION is set (the action sets both). The launcher drops
+        # them before starting the real binary. Remove this step and the
         # path_to_claude_code_executable input once the API behaves.
+        #
+        # Note: the action refuses to run when the workflow file in a PR
+        # differs from the one on the default branch, so changes to this
+        # file take effect only after they are merged.
         env:
           CLAUDE_CODE_VERSION: "2.1.301"
         run: |
@@ -133,7 +138,9 @@ jobs:
           real="$(command -v claude)"
           cat > /usr/local/bin/claude-launcher <<EOF
           #!/usr/bin/env bash
-          unset CLAUDE_CODE_ENTRYPOINT
+          # Claude Code derives the GitHub-Action entrypoint from CLAUDE_CODE_ACTION
+          # as well as from CLAUDE_CODE_ENTRYPOINT, so both have to go.
+          unset CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_ACTION
           exec "$real" "\$@"
           EOF
           chmod +x /usr/local/bin/claude-launcher
