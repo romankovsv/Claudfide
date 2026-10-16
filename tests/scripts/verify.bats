@@ -36,6 +36,14 @@ setup() {
   jq -e '[.results[] | select(.unit == "modules/beta" and .step == "fmt")][0].status == "fail"' out/summary.json
 }
 
+@test "relative --out works with the chdir-based wrapper (junit path regression)" {
+  install_fake_terraform
+  run scripts/verify.sh --out rel-out --units "modules/alpha"
+  [ "$status" -eq 0 ]
+  [ -f rel-out/modules_alpha.xml ]
+  grep -q -- "-junit-xml=$FIXTURE/rel-out/modules_alpha.xml" "$FAKE_TF_LOG"
+}
+
 @test "--units restricts the run" {
   install_fake_terraform
   run scripts/verify.sh --out out --units "modules/beta"

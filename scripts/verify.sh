@@ -46,6 +46,8 @@ if [[ ${#units[@]} -eq 0 ]]; then
 fi
 
 mkdir -p "$out_dir"
+# Absolute: terraform runs with -chdir=<unit>, so -junit-xml paths must not be relative.
+out_dir="$(cd "$out_dir" && pwd -P)"
 results="[]"
 overall=0
 
