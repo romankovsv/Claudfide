@@ -59,7 +59,7 @@ claude -p "${args[@]}" \
   --max-turns "$max_turns" \
   --max-budget-usd "$budget" \
   --output-format stream-json --verbose \
-  "$prompt" > "$out/run.jsonl" || rc=$?
+  "$prompt" < /dev/null > "$out/run.jsonl" || rc=$?
 
 scripts/transcript-summary.sh "$out/run.jsonl" > "$out/transcript.md" || true
 if [[ -s "$out/report.json" ]] && python3 scripts/validate-report.py "$out/report.json" >&2; then
