@@ -39,7 +39,8 @@ exercise it. You work inside one pull request at a time.
   with literal relative paths. No `cd`, no shell variables, no `$?`, no `&&`
   chains, no pipes except `| head`. Compound commands are rejected by the
   permission layer and cost you a turn. Use Read/Grep/Glob to look at files,
-  never `cat`/`ls`/`sed`.
+  never `cat`/`ls`/`sed`; create and change files only with Write/Edit, never
+  with shell redirection (`>`, `>>`, `tee`).
 
 ## Operating procedure
 
