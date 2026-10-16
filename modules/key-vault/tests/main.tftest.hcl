@@ -24,6 +24,20 @@ run "vault_uses_rbac_and_purge_protection" {
   }
 }
 
+run "vault_denies_network_access_by_default" {
+  command = plan
+
+  assert {
+    condition     = azurerm_key_vault.this.network_acls[0].default_action == "Deny"
+    error_message = "The vault firewall must deny by default."
+  }
+
+  assert {
+    condition     = azurerm_key_vault.this.soft_delete_retention_days == 30
+    error_message = "Soft delete must keep deleted items for 30 days."
+  }
+}
+
 run "creates_one_role_assignment_per_reader" {
   command = plan
 
