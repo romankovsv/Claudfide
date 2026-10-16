@@ -44,3 +44,16 @@ The stack has no backend configured. A real deployment would need one, and crede
 - Use `for_each` rather than `count` for repeated resources.
 - Environments are `dev`, `uat` and `prod`.
 - Format code with `terraform fmt -recursive` before committing.
+
+## Test agent
+
+Pull requests that change `modules/**` or `stacks/**` are handled by a Claude
+Code agent that writes and verifies `terraform test` suites and reports
+findings to reviewers; it never changes infrastructure code. Design, usage
+and limitations: [SOLUTION.md](SOLUTION.md). Everyday commands:
+
+```sh
+scripts/tf.sh test modules/<name>   # run one unit's tests (hermetic wrapper)
+make verify                         # fmt + validate + test for every unit
+make agent                          # run the agent locally on the current branch
+```
