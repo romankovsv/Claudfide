@@ -22,6 +22,7 @@ verify:
 
 lint:
 	shellcheck -S style scripts/*.sh tests/scripts/helpers.bash
+	python3 -m py_compile scripts/*.py
 	actionlint
 
 agent:

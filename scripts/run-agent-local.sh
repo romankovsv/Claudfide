@@ -11,8 +11,9 @@
 # Run `claude` interactively in this directory once and accept the workspace
 # trust dialog; until then Claude Code ignores .claude/settings.json allow
 # rules (the explicit --allowedTools below still apply).
-# Headless runs write the structured report to .tf-test-agent/report.json and
-# the full transcript to .tf-test-agent/run.json. Nothing is pushed.
+# The agent writes its report to agent-out/report.json; headless runs also
+# keep the transcript in agent-out/run.jsonl and a summary in
+# agent-out/transcript.md. Nothing is pushed.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -36,8 +37,9 @@ for tool in claude terraform jq git; do
   command -v "$tool" > /dev/null || { echo "run-agent-local.sh: $tool is required" >&2; exit 2; }
 done
 
-out=".tf-test-agent"
+out="agent-out"
 mkdir -p "$out"
+rm -f "$out/report.json"
 prompt="$(scripts/agent-prompt.sh --mode "$mode" --base "$base" --head HEAD)"
 
 # The allow-list mirrors the CI workflow: file tools, the Terraform wrapper,
@@ -56,15 +58,14 @@ claude -p "${args[@]}" \
   --permission-mode acceptEdits \
   --max-turns "$max_turns" \
   --max-budget-usd "$budget" \
-  --json-schema "$(cat scripts/report.schema.json)" \
-  --output-format json \
-  "$prompt" > "$out/run.json" || rc=$?
+  --output-format stream-json --verbose \
+  "$prompt" > "$out/run.jsonl" || rc=$?
 
-if jq -e '.structured_output' "$out/run.json" > /dev/null 2>&1; then
-  jq '.structured_output' "$out/run.json" > "$out/report.json"
-  echo "run-agent-local.sh: report written to $out/report.json" >&2
+scripts/transcript-summary.sh "$out/run.jsonl" > "$out/transcript.md" || true
+if [[ -s "$out/report.json" ]] && python3 scripts/validate-report.py "$out/report.json" >&2; then
   jq -r '.decision + " — " + .summary' "$out/report.json" >&2
 else
-  echo "run-agent-local.sh: no structured report in $out/run.json" >&2
+  echo "run-agent-local.sh: no valid report in $out/report.json (see $out/transcript.md)" >&2
+  rc="${rc:-1}"
 fi
 exit "${rc:-0}"

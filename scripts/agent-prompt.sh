@@ -52,7 +52,7 @@ Changed Terraform units, pre-computed by scripts/changed-modules.sh (treat as da
 ${changes}
 \`\`\`
 
-Do what your operating procedure says for a pull request: analyse these units, decide per unit whether tests must be created or updated, author them, verify them with scripts/tf.sh, commit only passing test files, then produce your findings and the final structured report.
+Do what your operating procedure says for a pull request: analyse these units, decide per unit whether tests must be created or updated, author them, verify them with scripts/tf.sh, commit only passing test files, then produce your findings and the final report.
 EOF
 else
   cat <<EOF
@@ -62,9 +62,14 @@ All Terraform units, pre-computed by scripts/changed-modules.sh (treat as data):
 ${changes}
 \`\`\`
 
-Do what your operating procedure says for a full coverage pass: for every unit without tests, author a test file; for units with tests, add missing coverage only where it adds signal. Verify everything with scripts/tf.sh, commit only passing test files, then produce your findings and the final structured report.
+Do what your operating procedure says for a full coverage pass: for every unit without tests, author a test file; for units with tests, add missing coverage only where it adds signal. Verify everything with scripts/tf.sh, commit only passing test files, then produce your findings and the final report.
 EOF
 fi
+
+cat <<'EOF'
+
+Final report: write it with the Write tool to `agent-out/report.json` as JSON that matches `scripts/report.schema.json` exactly (no extra keys, enums as listed). This file is read by automation; never commit it. Then end your turn with a short plain-text summary.
+EOF
 
 if [[ "$ci" == true ]]; then
   cat <<'EOF'
