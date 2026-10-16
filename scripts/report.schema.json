@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "tf-test-agent report",
+  "description": "Structured result the Terraform test agent returns at the end of a run. CI renders it into the pull request comment; nothing in it is trusted without the independent verify job.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "summary", "units", "tests_run", "findings", "skills_used"],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["tests_created", "tests_updated", "no_tests_needed", "blocked"],
+      "description": "tests_created: at least one new test file was committed. tests_updated: only existing test files changed. no_tests_needed: the change does not warrant test changes (say why in summary). blocked: the agent could not produce passing tests (say why)."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Two to five sentences for the reviewer: what changed, what was done about tests, what they should look at."
+    },
+    "units": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change_kind", "action", "reason"],
+        "properties": {
+          "path": { "type": "string", "description": "modules/<name> or stacks/<name>" },
+          "change_kind": {
+            "type": "string",
+            "enum": ["new_unit", "resources", "variables", "outputs", "defaults", "tests_only", "format_only", "scripts", "unchanged"],
+            "description": "What kind of change the pull request made to this unit."
+          },
+          "action": {
+            "type": "string",
+            "enum": ["created", "updated", "unchanged", "skipped"],
+            "description": "What the agent did to this unit's tests."
+          },
+          "test_files": { "type": "array", "items": { "type": "string" } },
+          "reason": { "type": "string", "description": "One sentence justifying the action." }
+        }
+      }
+    },
+    "tests_run": {
+      "type": "array",
+      "description": "Result of the agent's own terraform test runs, per unit, on the final committed state.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["unit", "result", "passed", "failed"],
+        "properties": {
+          "unit": { "type": "string" },
+          "result": { "type": "string", "enum": ["pass", "fail", "not_run"] },
+          "passed": { "type": "integer", "minimum": 0 },
+          "failed": { "type": "integer", "minimum": 0 },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "description": "Things a human reviewer should know about the infrastructure code. Report only; never change .tf files.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "unit", "title", "detail"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["high", "medium", "low", "info"] },
+          "unit": { "type": "string" },
+          "file": { "type": "string" },
+          "line": { "type": "integer", "minimum": 1 },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "recommendation": { "type": "string" }
+        }
+      }
+    },
+    "skills_used": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of the skills the agent applied during the run."
+    },
+    "limitations": {
+      "type": "string",
+      "description": "What the produced tests cannot show, and anything the agent could not verify."
+    }
+  }
+}
