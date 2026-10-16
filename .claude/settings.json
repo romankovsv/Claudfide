@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+      "Edit",
+      "Write",
+      "Skill",
+      "Bash(scripts/tf.sh:*)",
+      "Bash(scripts/changed-modules.sh:*)",
+      "Bash(scripts/verify.sh:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [
+      "Bash(terraform:*)",
+      "Bash(tofu:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout:*)",
+      "Bash(git switch:*)",
+      "WebFetch",
+      "WebSearch"
+    ]
+  }
+}
