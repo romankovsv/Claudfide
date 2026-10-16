@@ -29,6 +29,17 @@ variable "python_version" {
   default     = "3.12"
 }
 
+variable "ftps_state" {
+  description = "FTP/FTPS deployment access: Disabled, FtpsOnly or AllAllowed."
+  type        = string
+  default     = "Disabled"
+
+  validation {
+    condition     = contains(["Disabled", "FtpsOnly", "AllAllowed"], var.ftps_state)
+    error_message = "The ftps_state must be Disabled, FtpsOnly or AllAllowed."
+  }
+}
+
 variable "public_network_access_enabled" {
   description = "Allow access to the app from the public internet."
   type        = bool
