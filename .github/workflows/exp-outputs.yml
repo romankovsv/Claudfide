@@ -1,0 +1,43 @@
+name: exp outputs
+on:
+  push:
+    branches: [exp/outputs]
+permissions: {}
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      run_agent: ${{ steps.decide.outputs.run_agent }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+      - id: decide
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          echo "LABELS=[$LABELS]"
+          scripts/agent-gate.sh --actor "$GITHUB_ACTOR" --triggering-actor "$GITHUB_ACTOR" \
+            --draft false --labels "$LABELS" --head HEAD | tee -a "$GITHUB_OUTPUT"
+          echo "--- GITHUB_OUTPUT ---"; cat "$GITHUB_OUTPUT"
+  check:
+    needs: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: run_agent is set
+        env:
+          V: ${{ needs.gate.outputs.run_agent }}
+        run: 'echo "run_agent=[$V]"; [[ -n "$V" ]]'
+      - name: reason is set
+        if: always()
+        env:
+          V: ${{ needs.gate.outputs.reason }}
+        run: 'echo "reason=[$V]"; [[ -n "$V" ]]'
+      - name: labels json is an array when the event has no pull_request
+        if: always()
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: 'echo "[$LABELS]"; printf "%s" "$LABELS" | jq -e "type == \"array\""'
