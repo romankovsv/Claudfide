@@ -10,6 +10,7 @@ make_fixture_repo() {
   export FIXTURE
   mkdir -p "$FIXTURE/scripts" "$FIXTURE/modules/alpha/tests" "$FIXTURE/modules/beta" "$FIXTURE/stacks/platform"
   cp "$REPO_ROOT"/scripts/*.sh "$REPO_ROOT"/scripts/*.json "$REPO_ROOT"/scripts/*.py "$FIXTURE/scripts/"
+  cp -r "$REPO_ROOT/scripts/hooks" "$FIXTURE/scripts/hooks"
   cat > "$FIXTURE/modules/alpha/main.tf" <<'EOF'
 resource "null_resource" "a" {}
 EOF
