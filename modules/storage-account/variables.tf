@@ -42,6 +42,17 @@ variable "allowed_subnet_ids" {
   default     = []
 }
 
+variable "blob_delete_retention_days" {
+  description = "Soft-delete retention for blobs, in days. Azure accepts 1 to 365."
+  type        = number
+  default     = 7
+
+  validation {
+    condition     = var.blob_delete_retention_days >= 1 && var.blob_delete_retention_days <= 365
+    error_message = "blob_delete_retention_days must be between 1 and 365."
+  }
+}
+
 variable "tags" {
   description = "Tags for all resources."
   type        = map(string)
