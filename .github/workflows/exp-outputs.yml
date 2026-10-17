@@ -1,7 +1,7 @@
 name: exp outputs
 on:
-  push:
-    branches: [exp/outputs]
+  pull_request:
+    types: [opened, synchronize, reopened]
 permissions: {}
 jobs:
   gate:
@@ -14,30 +14,41 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 1
       - id: decide
         env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          DRAFT: ${{ github.event.pull_request.draft }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          echo "LABELS=[$LABELS]"
-          scripts/agent-gate.sh --actor "$GITHUB_ACTOR" --triggering-actor "$GITHUB_ACTOR" \
-            --draft false --labels "$LABELS" --head HEAD | tee -a "$GITHUB_OUTPUT"
-          echo "--- GITHUB_OUTPUT ---"; cat "$GITHUB_OUTPUT"
-  check:
+          scripts/agent-gate.sh --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
+            --draft "$DRAFT" --labels "$LABELS" --head HEAD | tee -a "$GITHUB_OUTPUT"
+  agent:
     needs: gate
+    if: needs.gate.outputs.run_agent == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: run_agent is set
+      - run: echo "agent would run"
+  report:
+    needs: [gate, agent]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      issues: write
+    steps:
+      - name: post what the report job sees
         env:
-          V: ${{ needs.gate.outputs.run_agent }}
-        run: 'echo "run_agent=[$V]"; [[ -n "$V" ]]'
-      - name: reason is set
-        if: always()
-        env:
-          V: ${{ needs.gate.outputs.reason }}
-        run: 'echo "reason=[$V]"; [[ -n "$V" ]]'
-      - name: labels json is an array when the event has no pull_request
-        if: always()
-        env:
-          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-        run: 'echo "[$LABELS]"; printf "%s" "$LABELS" | jq -e "type == \"array\""'
+          GH_TOKEN: ${{ github.token }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          RUN_AGENT: ${{ needs.gate.outputs.run_agent }}
+          GATE_REASON: ${{ needs.gate.outputs.reason }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          body="exp: event=${GITHUB_EVENT_NAME} actor=[$ACTOR] triggering_actor=[$TRIGGERING_ACTOR] agent_result=[$AGENT_RESULT] run_agent=[$RUN_AGENT] reason=[$GATE_REASON]"
+          gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$body" > /dev/null
