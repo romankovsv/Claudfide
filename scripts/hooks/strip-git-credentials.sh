@@ -27,12 +27,14 @@ fi
 
 # Authorization headers: in the local config and in every included file.
 while IFS= read -r key; do
-  [[ -n "$key" ]] && git -C "$root" config --local --unset-all "$key" || true
+  [[ -n "$key" ]] || continue
+  git -C "$root" config --local --unset-all "$key" || true
 done < <(git -C "$root" config --local --name-only --get-regexp '^http\..*\.extraheader$' 2>/dev/null || true)
 while IFS= read -r inc; do
   [[ -n "$inc" && -f "$inc" ]] || continue
   while IFS= read -r key; do
-    [[ -n "$key" ]] && git config --file "$inc" --unset-all "$key" || true
+    [[ -n "$key" ]] || continue
+    git config --file "$inc" --unset-all "$key" || true
   done < <(git config --file "$inc" --name-only --get-regexp '^http\..*\.extraheader$' 2>/dev/null || true)
 done < <(git -C "$root" config --local --get-all include.path 2>/dev/null || true)
 
