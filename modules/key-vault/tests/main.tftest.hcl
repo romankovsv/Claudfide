@@ -38,6 +38,52 @@ run "vault_denies_network_access_by_default" {
   }
 }
 
+run "soft_delete_retention_can_be_overridden" {
+  command = plan
+
+  variables {
+    soft_delete_retention_days = 90
+  }
+
+  assert {
+    condition     = azurerm_key_vault.this.soft_delete_retention_days == 90
+    error_message = "The retention variable must reach the vault."
+  }
+}
+
+run "accepts_minimum_retention_of_seven_days" {
+  command = plan
+
+  variables {
+    soft_delete_retention_days = 7
+  }
+
+  assert {
+    condition     = azurerm_key_vault.this.soft_delete_retention_days == 7
+    error_message = "Seven days is the lowest valid retention."
+  }
+}
+
+run "rejects_retention_below_seven_days" {
+  command = plan
+
+  variables {
+    soft_delete_retention_days = 6
+  }
+
+  expect_failures = [var.soft_delete_retention_days]
+}
+
+run "rejects_retention_above_ninety_days" {
+  command = plan
+
+  variables {
+    soft_delete_retention_days = 91
+  }
+
+  expect_failures = [var.soft_delete_retention_days]
+}
+
 run "creates_one_role_assignment_per_reader" {
   command = plan
 
