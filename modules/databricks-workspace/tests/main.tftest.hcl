@@ -42,6 +42,28 @@ run "public_access_can_be_switched_off" {
   }
 }
 
+run "public_access_is_off_by_default" {
+  command = plan
+
+  assert {
+    condition     = azurerm_databricks_workspace.this.public_network_access_enabled == false
+    error_message = "Public network access must be disabled unless the caller opts in."
+  }
+}
+
+run "public_access_can_be_switched_on" {
+  command = plan
+
+  variables {
+    public_network_access_enabled = true
+  }
+
+  assert {
+    condition     = azurerm_databricks_workspace.this.public_network_access_enabled == true
+    error_message = "Setting public_network_access_enabled to true must enable public access."
+  }
+}
+
 run "accepts_standard_sku" {
   command = plan
 

@@ -27,7 +27,7 @@ variable "sku" {
 variable "public_network_access_enabled" {
   description = "Allow access to the workspace from the public internet."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "tags" {
