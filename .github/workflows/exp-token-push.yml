@@ -1,0 +1,21 @@
+name: exp token push
+on:
+  push:
+    branches: [exp/token-push]
+permissions: {}
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/law-retention-validation
+          fetch-depth: 1
+      - run: |
+          git config user.name 'claude[bot]'
+          git config user.email '41898282+claude[bot]@users.noreply.github.com'
+          git commit --allow-empty -m "exp: empty commit pushed with GITHUB_TOKEN"
+          git push origin HEAD:feat/law-retention-validation
+          git rev-parse HEAD
