@@ -32,3 +32,51 @@ run "retention_can_be_raised" {
     error_message = "The retention variable must be passed to the workspace."
   }
 }
+
+# Retention validation (30 to 730 days)
+
+run "rejects_retention_below_30_days" {
+  command = plan
+
+  variables {
+    retention_in_days = 29
+  }
+
+  expect_failures = [var.retention_in_days]
+}
+
+run "rejects_retention_above_730_days" {
+  command = plan
+
+  variables {
+    retention_in_days = 731
+  }
+
+  expect_failures = [var.retention_in_days]
+}
+
+run "accepts_retention_at_lower_bound" {
+  command = plan
+
+  variables {
+    retention_in_days = 30
+  }
+
+  assert {
+    condition     = azurerm_log_analytics_workspace.this.retention_in_days == 30
+    error_message = "30 days must be accepted as the lower bound."
+  }
+}
+
+run "accepts_retention_at_upper_bound" {
+  command = plan
+
+  variables {
+    retention_in_days = 730
+  }
+
+  assert {
+    condition     = azurerm_log_analytics_workspace.this.retention_in_days == 730
+    error_message = "730 days must be accepted as the upper bound."
+  }
+}
