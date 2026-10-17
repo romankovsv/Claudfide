@@ -107,7 +107,7 @@ flowchart LR
 4. **guard** — the diff between the PR head and the branch tip may contain test files only.
 5. **report** — one sticky comment: decision, per-unit actions and reasons, the agent's test runs, findings for reviewers with severity and location, the independent verification table and the guard output. If the agent failed, timed out or ran out of budget, the comment says so and shows what it did. The same results are attached to the branch tip — the agent's commit — as commit statuses (`tf-test-agent/agent`, `tf-test-agent/verify`, `tf-test-agent/guard`), which is what required status checks should name.
 
-The agent's push changes test files only, which the workflow's `paths` filter excludes, so one human push means one run of this workflow (GitHub still creates and holds a run of the separate CI workflow for the bot's push; approving it is optional). Should a run of this workflow start on the agent's commit (re-run, reopen), the gate skips the agent and the run only verifies, in a second sticky comment.
+GitHub creates runs for the agent's push and holds them for approval (it does so for any bot push on this repository); the statuses above already carry the results, so approving is optional. An approved, re-run or reopened run on the agent's commit is skipped by the gate and only verifies, in a second sticky comment.
 
 ### How the LLM is controlled and verified
 

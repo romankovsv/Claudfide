@@ -17,16 +17,15 @@
 #   report  assembles verify + guard + the agent's report into one sticky
 #           PR comment, also when the agent failed, timed out or was skipped.
 #
-# Loop prevention, in layers: the agent's push changes test files only, and
-# the paths filter excludes those, so the normal case has exactly one run of
-# this workflow per human push. Should a run still start on the agent's
-# commit (a human re-run, a reopen), the gate skips the agent: GitHub
-# attributes bot pushes to `github-actions[bot]` (not `claude[bot]`) and an
-# approved or re-run workflow carries yet another actor, so the gate also
-# looks at who authored the head commit. Such a run only verifies and writes
-# a second, "verification only" comment, so the agent's report is not
-# overwritten. Concurrency queues runs per PR instead of cancelling, so a
-# report is never lost.
+# Loop prevention: the agent's push creates a run of this workflow that
+# GitHub holds for approval. Whether that run is approved, re-run or the PR
+# is reopened, the gate skips the agent: GitHub attributes bot pushes to
+# `github-actions[bot]` (not `claude[bot]`) and an approved or re-run
+# workflow carries yet another actor, so the gate also looks at who authored
+# the head commit. Such a run only verifies and writes a second,
+# "verification only" comment, so the agent's report is not overwritten.
+# Concurrency queues runs per PR instead of cancelling, so a report is never
+# lost.
 #
 # Results on the right commit: verify and guard look at the branch tip, i.e.
 # the agent's commit, but their check runs hang off the human commit that
@@ -41,10 +40,6 @@ on:
     paths:
       - "modules/**"
       - "stacks/**"
-      # A push that only changes test files — the agent's own push, or a
-      # hand-written test fix — starts no run of this workflow: CI's terraform
-      # job verifies it, and the agent's commit already carries statuses.
-      - "!**/tests/*.tftest.hcl"
 
 concurrency:
   group: tf-test-agent-pr-${{ github.event.pull_request.number }}
@@ -218,12 +213,12 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # The workflow's own token instead of the Claude GitHub App: it is
           # scoped to this job's permissions and expires with the job, and no
-          # GitHub App has to be installed. It does not stop GitHub from
-          # creating (and holding for approval) runs for the agent's push —
-          # a plain GITHUB_TOKEN push does that too on this repository — so
-          # the paths filter above keeps this workflow out of tests-only
-          # pushes, and the report job attaches the results for the agent's
-          # commit as commit statuses on the branch tip.
+          # GitHub App has to be installed. GitHub still creates a run for
+          # the agent's push and holds it for approval (it does so for any
+          # bot push on this repository, whatever token made it); that run is
+          # informational — the report job attaches the results for the
+          # agent's commit as commit statuses on the branch tip, and the gate
+          # keeps the agent out of its own commit if someone approves it.
           github_token: ${{ github.token }}
           path_to_claude_code_executable: /usr/local/bin/claude-launcher
           prompt: ${{ steps.prompt.outputs.prompt }}
