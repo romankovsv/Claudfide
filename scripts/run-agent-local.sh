@@ -18,6 +18,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$REPO_ROOT"
+# Arms the agent's hooks in .claude/settings.json (scripts/hooks/*): test
+# files only, no credential reads, no stop without a valid report.
+export TF_TEST_AGENT=1
 
 base="main" mode="pr" interactive=false
 budget="${TF_TEST_AGENT_BUDGET_USD:-5}"

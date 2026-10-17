@@ -74,7 +74,7 @@ EOF
 if [[ "$ci" == true ]]; then
   cat <<'EOF'
 
-Execution context: GitHub Actions. After verification, commit the test files to the current branch and push with `git push`. Never force-push, never change branches.
+Execution context: GitHub Actions. After verification, commit the test files to the current branch. Do not push: the workflow pushes your commit after its own guard. Never change branches.
 EOF
 else
   cat <<'EOF'

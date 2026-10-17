@@ -21,7 +21,7 @@ verify:
 	scripts/verify.sh --out .verify-out
 
 lint:
-	shellcheck -S style scripts/*.sh tests/scripts/helpers.bash
+	shellcheck -S style -x scripts/*.sh scripts/hooks/*.sh tests/scripts/helpers.bash
 	python3 -m py_compile scripts/*.py
 	actionlint
 

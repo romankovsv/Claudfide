@@ -31,7 +31,7 @@ jobs:
           fetch-depth: 1
 
       - name: shellcheck
-        run: shellcheck -S style scripts/*.sh tests/scripts/helpers.bash
+        run: shellcheck -S style -x scripts/*.sh scripts/hooks/*.sh tests/scripts/helpers.bash
 
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:

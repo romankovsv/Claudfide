@@ -70,10 +70,12 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Decide whether the agent may run
         id: decide
         env:
+          GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
@@ -81,7 +83,8 @@ jobs:
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
           set -o pipefail
-          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
+          git -c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            fetch --no-tags --depth=1 origin "$HEAD_SHA"
           scripts/agent-gate.sh --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
             --draft "$DRAFT" --labels "$LABELS" --head "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
 
@@ -100,6 +103,11 @@ jobs:
       # of every subprocess it starts (terraform, git). scripts/tf.sh adds a
       # second, independent layer with `env -i`.
       CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+      # Arms the agent's hooks (.claude/settings.json → scripts/hooks/*):
+      # write only test files and the report, never read .git or credential
+      # files, no real providers or apply in tests, no stopping without a
+      # valid report, and no git credentials in the session at all.
+      TF_TEST_AGENT: "1"
     outputs:
       outcome: ${{ steps.claude.outcome }}
       head_before: ${{ github.event.pull_request.head.sha }}
@@ -109,6 +117,8 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+          # No token left in .git: the agent never pushes, the workflow does.
+          persist-credentials: false
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
@@ -225,12 +235,13 @@ jobs:
           # --agent: the whole session runs as the custom agent (its model, its
           # preloaded skills, its tool denials). The allow-list below is the
           # permission layer: file tools, the Terraform wrapper, git for the
-          # commit. No raw terraform, no network tools, no gh.
+          # commit. No raw terraform, no network tools, no gh, no git push —
+          # the "Push" step below pushes after its own guard.
           claude_args: |
             --agent tf-test-engineer
             --max-turns 120
             --max-budget-usd 6
-            --allowedTools "Read,Grep,Glob,Edit,Write,Skill,Bash(scripts/tf.sh:*),Bash(scripts/changed-modules.sh:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(git add:*),Bash(git commit:*),Bash(git push:*)"
+            --allowedTools "Read,Grep,Glob,Edit,Write,Skill,Bash(scripts/tf.sh:*),Bash(scripts/changed-modules.sh:*),Bash(git status:*),Bash(git diff:*),Bash(git log:*),Bash(git rev-parse:*),Bash(git add:*),Bash(git commit:*)"
 
       - name: Validate the agent's report and summarise the transcript
         id: report
@@ -254,6 +265,29 @@ jobs:
             echo "::warning::the agent did not leave a valid agent-out/report.json (outcome: $OUTCOME)"
           fi
 
+      - name: Push the agent's commits after a local guard check
+        id: push
+        if: steps.claude.outcome == 'success' && steps.report.outputs.valid == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          BEFORE: ${{ github.event.pull_request.head.sha }}
+        run: |
+          after="$(git rev-parse HEAD)"
+          if [[ "$after" == "$BEFORE" ]]; then
+            echo "nothing to push: the agent committed nothing"
+            exit 0
+          fi
+          # The guard script of the base branch, not of this checkout.
+          git show "origin/${BASE_REF}:scripts/guard-agent-diff.sh" > "$RUNNER_TEMP/guard-agent-diff.sh"
+          chmod +x "$RUNNER_TEMP/guard-agent-diff.sh"
+          "$RUNNER_TEMP/guard-agent-diff.sh" "$BEFORE" "$after"
+          git -c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            push "https://github.com/${REPO}.git" "HEAD:refs/heads/${HEAD_REF}"
+          echo "pushed $(git rev-list --count "$BEFORE..$after") commit(s) to ${HEAD_REF}"
+
       - name: Upload the agent report
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -264,9 +298,9 @@ jobs:
           retention-days: 30
 
       - name: Fail the job when the agent did not finish cleanly
-        if: steps.claude.outcome != 'success' || steps.report.outputs.valid != 'true'
+        if: steps.claude.outcome != 'success' || steps.report.outputs.valid != 'true' || steps.push.outcome == 'failure'
         run: |
-          echo "::error::agent step outcome: ${{ steps.claude.outcome }}, valid report: ${{ steps.report.outputs.valid }}"
+          echo "::error::agent step outcome: ${{ steps.claude.outcome }}, valid report: ${{ steps.report.outputs.valid }}, push: ${{ steps.push.outcome }}"
           exit 1
 
   verify:
@@ -285,6 +319,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
@@ -332,14 +367,17 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Only test files may have changed since the PR head
         env:
+          GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ github.event.pull_request.head.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           mkdir -p guard-out
-          git fetch --no-tags origin "refs/heads/${HEAD_REF}"
+          git -c "http.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)" \
+            fetch --no-tags origin "refs/heads/${HEAD_REF}"
           scripts/guard-agent-diff.sh "$BEFORE" "$(git rev-parse FETCH_HEAD)" 2>&1 | tee guard-out/guard.txt
           exit "${PIPESTATUS[0]}"
 
@@ -368,6 +406,7 @@ jobs:
           fetch-depth: 1
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
+          persist-credentials: false
 
       - name: Download artifacts
         uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6

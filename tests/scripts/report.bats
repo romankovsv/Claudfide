@@ -124,7 +124,7 @@ EOF
   [[ "$output" == *"Mode: pr"* ]]
   [[ "$output" == *"Pull request: 5"* ]]
   [[ "$output" == *'"path": "modules/alpha"'* ]]
-  [[ "$output" == *"git push"* ]]
+  [[ "$output" == *"Do not push: the workflow pushes"* ]]
 }
 
 @test "agent-prompt full mode lists all units and local footer" {
