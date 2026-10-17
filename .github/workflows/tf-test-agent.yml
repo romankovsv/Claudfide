@@ -12,6 +12,8 @@
 #           on the branch tip, i.e. including whatever the agent committed.
 #   guard   fails when the agent's commits touched anything but
 #           **/tests/*.tftest.hcl.
+#           gate and guard run their scripts from the base branch, so the
+#           pull request cannot change the controls applied to it.
 #   report  assembles verify + guard + the agent's report into one sticky
 #           PR comment, also when the agent failed, timed out or was skipped.
 #
@@ -53,22 +55,28 @@ jobs:
       run_agent: ${{ steps.decide.outputs.run_agent }}
       reason: ${{ steps.decide.outputs.reason }}
     steps:
-      - name: Check out the pull request head commit
+      # Control scripts come from the base branch, never from the pull
+      # request: a PR (or the agent inside it) cannot change the gate for
+      # its own run, and a branch cut before the script existed still works.
+      - name: Check out the base branch (the gate script comes from there)
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 1
 
       - name: Decide whether the agent may run
         id: decide
         env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           DRAFT: ${{ github.event.pull_request.draft }}
           LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
+          set -o pipefail
+          git fetch --no-tags --depth=1 origin "$HEAD_SHA"
           scripts/agent-gate.sh --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
-            --draft "$DRAFT" --labels "$LABELS" --head HEAD | tee -a "$GITHUB_OUTPUT"
+            --draft "$DRAFT" --labels "$LABELS" --head "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
 
   agent:
     name: agent
@@ -302,18 +310,22 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Check out with history
+      # The guard script comes from the base branch so that nothing committed
+      # to the pull request — by the agent or by anyone — can weaken it.
+      - name: Check out the base branch with history
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
+          ref: ${{ github.event.pull_request.base.ref }}
           fetch-depth: 0
 
       - name: Only test files may have changed since the PR head
         env:
           BEFORE: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
           mkdir -p guard-out
-          scripts/guard-agent-diff.sh "$BEFORE" "$(git rev-parse HEAD)" 2>&1 | tee guard-out/guard.txt
+          git fetch --no-tags origin "refs/heads/${HEAD_REF}"
+          scripts/guard-agent-diff.sh "$BEFORE" "$(git rev-parse FETCH_HEAD)" 2>&1 | tee guard-out/guard.txt
           exit "${PIPESTATUS[0]}"
 
       - name: Upload guard output
