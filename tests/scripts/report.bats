@@ -135,6 +135,33 @@ EOF
   [[ "$output" == *"do NOT push"* ]]
 }
 
+@test "post-status sets a commit status on the given sha with all fields" {
+  install_fake_gh "[]"
+  run scripts/post-status.sh owner/repo 0123456789abcdef0123456789abcdef01234567 tf-test-agent/verify success "all checks passed" https://example.test/run/1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tf-test-agent/verify=success on 0123456"* ]]
+  grep -q "POST repos/owner/repo/statuses/0123456789abcdef0123456789abcdef01234567 state=success context=tf-test-agent/verify description=all checks passed target_url=https://example.test/run/1" "$FAKE_GH_LOG"
+}
+
+@test "post-status works without a target url and truncates long descriptions" {
+  install_fake_gh "[]"
+  long="$(printf 'x%.0s' $(seq 1 200))"
+  run scripts/post-status.sh owner/repo abcdef1 tf-test-agent/guard failure "$long"
+  [ "$status" -eq 0 ]
+  ! grep -q "target_url" "$FAKE_GH_LOG"
+  desc="$(grep -o 'description=x*' "$FAKE_GH_LOG" | head -1)"
+  [ "${#desc}" -eq $((12 + 140)) ]
+}
+
+@test "post-status rejects an unknown state and a non-sha" {
+  install_fake_gh "[]"
+  run scripts/post-status.sh owner/repo abcdef1 ctx maybe "d"
+  [ "$status" -eq 2 ]
+  run scripts/post-status.sh owner/repo not-a-sha ctx success "d"
+  [ "$status" -eq 2 ]
+  [ ! -s "$FAKE_GH_LOG" ]
+}
+
 # --- helpers local to this file --------------------------------------------
 
 install_fake_gh() {
@@ -148,7 +175,7 @@ log="$FAKE_GH_LOG"
 comments="$FAKE_GH_DIR/comments.json"
 EOF
   cat >> "$FAKE_GH_DIR/gh" <<'EOF'
-method="GET"; path=""; jqexpr=""
+method="GET"; path=""; jqexpr=""; fields=""
 args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
@@ -156,10 +183,11 @@ for ((i=0; i<${#args[@]}; i++)); do
     --jq) jqexpr="${args[$((i+1))]}"; i=$((i+1)) ;;
     --paginate|api) ;;
     -F) i=$((i+1)) ;;
+    -f) fields="$fields ${args[$((i+1))]}"; i=$((i+1)) ;;
     *) [[ -z "$path" ]] && path="${args[$i]}" ;;
   esac
 done
-echo "$method $path" >> "$log"
+echo "$method $path$fields" >> "$log"
 if [[ "$method" == "GET" ]]; then
   if [[ -n "$jqexpr" ]]; then jq -r "$jqexpr" "$comments"; else cat "$comments"; fi
 else

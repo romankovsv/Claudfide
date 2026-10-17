@@ -17,14 +17,22 @@
 #   report  assembles verify + guard + the agent's report into one sticky
 #           PR comment, also when the agent failed, timed out or was skipped.
 #
-# Loop prevention: the agent's own push re-triggers this workflow. GitHub
-# attributes that run to `github-actions[bot]` (not `claude[bot]`), and an
-# approved or re-run workflow carries yet another actor, so the gate also
-# looks at who authored the head commit. On the agent's commit only
-# verify/guard/report run and the comment is a second, "verification only"
-# one, so the agent's report is not overwritten. Concurrency queues runs per
-# PR instead of cancelling, so a report is never lost between the agent's
-# push and the comment.
+# Loop prevention, in layers: the agent pushes with the workflow's own
+# token, and such pushes start no workflow run at all, so the normal case has
+# exactly one run per human push. Should a run still start on the agent's
+# commit (a human re-run, a reopen, a different token), the gate skips the
+# agent: GitHub attributes app pushes to `github-actions[bot]` (not
+# `claude[bot]`) and an approved or re-run workflow carries yet another
+# actor, so the gate also looks at who authored the head commit. Such a run
+# only verifies and writes a second, "verification only" comment, so the
+# agent's report is not overwritten. Concurrency queues runs per PR instead
+# of cancelling, so a report is never lost.
+#
+# Results on the right commit: verify and guard look at the branch tip, i.e.
+# the agent's commit, but their check runs hang off the human commit that
+# started the run. The report job therefore also posts commit statuses
+# (tf-test-agent/agent, /verify, /guard) on the tip, which is what required
+# status checks should name.
 name: Terraform test agent
 
 on:
@@ -88,7 +96,6 @@ jobs:
       contents: write        # push test commits to the PR branch
       pull-requests: write   # the action's GitHub tooling
       issues: write
-      id-token: write        # Claude GitHub App token exchange
     env:
       # Claude Code scrubs Anthropic/GitHub/cloud secrets from the environment
       # of every subprocess it starts (terraform, git). scripts/tf.sh adds a
@@ -205,6 +212,13 @@ jobs:
         uses: anthropics/claude-code-action@374f254f5efaf968abfe15d399fd90972e8138b9 # v1.0.251
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The workflow's own token instead of the Claude GitHub App: it is
+          # scoped to this job's permissions, expires with the job, and a
+          # push made with it starts no new workflow run — so the agent's
+          # commit cannot re-trigger this workflow and needs no approval.
+          # The results for that commit are attached by the report job as
+          # commit statuses on the branch tip. No GitHub App to install.
+          github_token: ${{ github.token }}
           path_to_claude_code_executable: /usr/local/bin/claude-launcher
           prompt: ${{ steps.prompt.outputs.prompt }}
           # --agent: the whole session runs as the custom agent (its model, its
@@ -345,6 +359,7 @@ jobs:
     permissions:
       pull-requests: write
       issues: write
+      statuses: write        # results on the branch tip (the agent's commit)
     steps:
       - name: Check out the scripts
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -387,3 +402,40 @@ jobs:
           scripts/render-report.sh "${args[@]}" > comment.md
           cat comment.md >> "$GITHUB_STEP_SUMMARY"
           scripts/post-comment.sh "$REPO" "$PR_NUMBER" comment.md
+
+      - name: Attach the results to the branch tip as commit statuses
+        if: needs.verify.outputs.head != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD: ${{ needs.verify.outputs.head }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AGENT_RESULT: ${{ needs.agent.result }}
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          GUARD_RESULT: ${{ needs.guard.result }}
+        run: |
+          to_state() { case "$1" in success) echo success ;; failure) echo failure ;; *) echo error ;; esac; }
+
+          verify_desc="fmt, validate and terraform test on $(echo "$HEAD" | cut -c1-7)"
+          if [[ -s artifacts/verify-results/summary.json ]]; then
+            failed="$(jq '[.results[] | select(.status != "pass")] | length' artifacts/verify-results/summary.json)"
+            [[ "$failed" -eq 0 ]] && verify_desc="all units pass" || verify_desc="$failed failing step(s)"
+          fi
+          scripts/post-status.sh "$REPO" "$HEAD" tf-test-agent/verify "$(to_state "$VERIFY_RESULT")" "$verify_desc" "$RUN_URL"
+
+          if [[ "$GUARD_RESULT" != "skipped" ]]; then
+            scripts/post-status.sh "$REPO" "$HEAD" tf-test-agent/guard "$(to_state "$GUARD_RESULT")" \
+              "$([[ "$GUARD_RESULT" == success ]] && echo "only test files were touched" || echo "files outside tests/ were touched")" "$RUN_URL"
+          fi
+
+          if [[ "$AGENT_RESULT" != "skipped" ]]; then
+            decision="$(jq -r '.decision // empty' artifacts/agent-report/report.json 2>/dev/null || true)"
+            case "$decision" in
+              tests_created|tests_updated|no_tests_needed)
+                scripts/post-status.sh "$REPO" "$HEAD" tf-test-agent/agent success "${decision//_/ }" "$RUN_URL" ;;
+              blocked)
+                scripts/post-status.sh "$REPO" "$HEAD" tf-test-agent/agent failure "blocked: see the PR comment" "$RUN_URL" ;;
+              *)
+                scripts/post-status.sh "$REPO" "$HEAD" tf-test-agent/agent "$(to_state "$AGENT_RESULT")" "agent ${AGENT_RESULT}, no readable report" "$RUN_URL" ;;
+            esac
+          fi

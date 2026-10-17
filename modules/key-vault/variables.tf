@@ -30,6 +30,17 @@ variable "allowed_subnet_ids" {
   default     = []
 }
 
+variable "soft_delete_retention_days" {
+  description = "How long a deleted vault or secret can be recovered. Azure accepts 7 to 90 days."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.soft_delete_retention_days >= 7 && var.soft_delete_retention_days <= 90
+    error_message = "soft_delete_retention_days must be between 7 and 90."
+  }
+}
+
 variable "tags" {
   description = "Tags for all resources."
   type        = map(string)
