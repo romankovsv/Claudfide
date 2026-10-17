@@ -6,43 +6,45 @@ every pull request that touches Terraform code, commits only green test files
 to the PR branch, and tells reviewers what it found. Nothing here needs Azure
 credentials; every test uses mock providers and `command = plan`.
 
-Example pull request: **[#5](https://github.com/romankovsv/Claudfide/pull/5)**
+Example pull request: **[#5](https://github.com/romankovsv/claudfide-agent-tf/pull/5)**
 — a real change to `modules/function-app` (FTPS made configurable, disabled by
 default), handled end to end by the agent in CI. Coverage for all nine units was
-produced by the same agent in a local run: **[#2](https://github.com/romankovsv/Claudfide/pull/2)**.
+produced by the same agent in a local run: **[#2](https://github.com/romankovsv/claudfide-agent-tf/pull/2)**.
 
 ## 1. Main decisions and what they cost
 
 | Decision | Why | What was given up |
 |---|---|---|
 | **Claude Code as the agent runtime** (`anthropics/claude-code-action` in CI, the `claude` CLI locally) | Its primitives map 1:1 onto the task: `.claude/agents/*.md` is a custom agent, `.claude/skills/*/SKILL.md` are reusable skills, `claude --agent <name>` runs the same definition in CI and on a laptop. No bespoke agent loop to defend. | Vendor lock-in; an API key with a balance in CI; the action's own prompt/system behaviour is a dependency (see "structured output" below). |
-| **The agent may only write `**/tests/*.tftest.hcl`**, enforced by a CI job (`guard`), not just by instructions | "Decisions about changing infrastructure code stay with people." Instructions are not enforcement; a diff check is. | The agent cannot fix a module even when the fix is obvious — it files a finding instead. |
+| **The agent may only write `**/tests/*.tftest.hcl`**, enforced by a CI job (`guard`), not just by instructions | Changing infrastructure code is a decision for people, so the agent reports and never edits it. Instructions are not enforcement; a diff check is. | The agent cannot fix a module even when the fix is obvious — it files a finding instead. |
 | **Independent `verify` job without LLM or secrets** | The agent's "all tests pass" is self-reported. Re-running `fmt`/`validate`/`terraform test` on the branch tip is the oracle; it is also what runs when a human pushes. | ~25 s of extra CI per run; tests run twice. |
 | **A single Terraform entry point, `scripts/tf.sh`** (`env -i`, fixed flags, read-only lock files, four allowed subcommands) | `terraform test` executes repository code: `modules/function-app` runs `scripts/build-info.sh` through `data "external"`. A PR can change that script, so Terraform must never inherit the job's secrets. The wrapper is also the only Bash the agent may run, which keeps the allow-list short and auditable. | No `terraform plan/apply` from the agent, by design; developers who want raw `terraform` run it outside the wrapper. |
 | **Deterministic pre-analysis** (`scripts/changed-modules.sh` → JSON) fed to the agent | "Which units changed and how" is a git question, not an LLM question. Fewer tokens, no hallucinated file lists, testable with bats. | The categorisation is by path and file name; the agent still reads the real diff for the "what" part. |
 | **Report as a file + schema validation** instead of the action's `--json-schema` structured output | The structured-output path worked locally but not inside the action (Claude ended with text; the action failed). A file written with the ordinary `Write` tool and validated by `scripts/validate-report.py` is boring and reliable. | Schema enforcement happens after the fact, not at generation time; an invalid report fails the job rather than being repaired. |
 | **The PR comment is assembled by scripts, not by the agent** (`render-report.sh`, `post-comment.sh`, two sticky markers) | Results must reach the PR even when the agent times out, exceeds its budget or is rejected by the action. The comment also carries the verification table and the guard output, which the agent cannot vouch for. | The agent cannot format its own comment; findings follow a fixed template. |
 | **`pull_request`, not `pull_request_target`** | Fork PRs never see secrets and never run the agent. The action also rejects bot and non-write actors. | External contributors get no agent help; a maintainer re-pushes their branch if they want it. |
-| **Queued, not cancelled, runs per PR** (`concurrency.cancel-in-progress: false`) | The agent's push re-triggers the workflow; cancelling the first run would lose its report job. | Rapid pushes queue up; each queued run costs an agent invocation unless the actor is the bot (then the agent job is skipped). |
+| **Queued, not cancelled, runs per PR** (`concurrency.cancel-in-progress: false`) | The agent's push re-triggers the workflow; cancelling the first run would lose its report job. | Rapid pushes queue up; each queued run costs an agent invocation unless the `gate` job skips the agent (bot actor, or a head commit the agent made itself). |
+| **A deterministic `gate` job decides whether the agent runs** (`scripts/agent-gate.sh`: draft, label, bot actor, head-commit author) | The agent must never run on its own commit. GitHub attributes the agent's push to `github-actions[bot]`, not `claude[bot]`, and an approved or re-run workflow carries yet another actor, so an actor check alone is not enough; the author of the head commit is. Found the hard way (section 7). | One more 5-second job per run. |
 | **Sonnet with hard caps** (`--max-turns 120`, `--max-budget-usd 6`, job timeout 30 min) | Predictable cost; observed runs: $0.3–0.6, 1–3 minutes. | A very large PR may hit the cap; the agent is told to stop cleanly and report what it did not finish. |
 
 ## 2. How to run it
 
 **Prerequisites**
 
-- GitHub repository with Actions enabled; the [Claude GitHub App](https://github.com/apps/claude) installed on it (the action authenticates as the app and pushes as `claude[bot]`).
-- Repository secret `ANTHROPIC_API_KEY` from an Anthropic Console organisation **with credits** (the first CI runs of this repo failed with "Credit balance is too low" — the transcript summary in the PR comment showed it).
+- GitHub repository with Actions enabled; the [Claude GitHub App](https://github.com/apps/claude) installed on it (the action authenticates as the app; the agent's commits are authored by `claude[bot]`).
+- Repository secret `ANTHROPIC_API_KEY` from an Anthropic Console organisation **with credits**; the workflow's preflight step fails fast with the API's own error when the key cannot authenticate or has no balance (see also "Billing path of the GitHub Action" in section 7).
 - Branch protection on `main`: require a pull request; the agent never pushes to `main`.
 - Locally: Terraform ≥ 1.9 (CI pins 1.16.6), `jq`, `bats` (`npm i -g bats`), `shellcheck`, `actionlint`, and the Claude Code CLI signed in.
 
 **In CI** — nothing to start by hand. Open a pull request that changes `modules/**` or `stacks/**`:
 
-1. `agent` (needs the API key): installs Terraform and bubblewrap, pre-downloads providers, builds the prompt (`scripts/agent-prompt.sh`), runs `claude-code-action` with `--agent tf-test-engineer` and the tool allow-list, validates `agent-out/report.json`, summarises the transcript.
-2. `verify` (no secrets): `scripts/verify.sh` on the branch tip — `fmt`, `validate`, `terraform test` for all nine units, JUnit + logs as artifacts, failures as annotations.
-3. `guard`: `scripts/guard-agent-diff.sh <PR head before> <branch tip>` — only `**/tests/*.tftest.hcl` may differ.
-4. `report`: one sticky comment with the agent's report, the verification table, the guard result and, if the agent failed, what it did.
+1. `gate` (no secrets, 5 s): `scripts/agent-gate.sh` decides whether the agent may run — not on drafts, not with the label `tf-tests:skip`, not for a bot actor, and never when the head commit was authored by the agent.
+2. `agent` (the only job with the API key): installs Terraform and bubblewrap, pre-downloads providers, checks the key with one minimal API call, installs Claude Code behind a small launcher (section 7), builds the prompt (`scripts/agent-prompt.sh`), runs `claude-code-action` with `--agent tf-test-engineer` and the tool allow-list, validates `agent-out/report.json`, summarises the transcript.
+3. `verify` (no secrets): `scripts/verify.sh` on the branch tip — `fmt`, `validate`, `terraform test` for all nine units, JUnit + logs as artifacts, failures as annotations.
+4. `guard`: `scripts/guard-agent-diff.sh <PR head before> <branch tip>` — only `**/tests/*.tftest.hcl` may differ.
+5. `report`: one sticky comment with the agent's report, the verification table, the guard result and, if the agent failed, what it did.
 
-Opt out per PR with the label `tf-tests:skip`; draft PRs are ignored. The agent's own push re-triggers the workflow, but the agent job is skipped for `claude[bot]`, so the second run only verifies the commit (second sticky comment, marker `tf-test-agent-verify`).
+The agent's own push re-triggers the workflow; the gate skips the agent job on that commit, so the second run only verifies it and writes a second sticky comment (marker `tf-test-agent-verify`) instead of overwriting the agent's report. GitHub treats a push by a GitHub App like one from an outside contributor and may hold that second run until a maintainer clicks "Approve and run workflows" (this repository keeps GitHub's default approval policy); approving it is safe because of the gate — the run only verifies.
 
 **Locally** — the same agent, same skills, same allow-list:
 
@@ -66,12 +68,12 @@ The local runner writes `agent-out/report.json` and `agent-out/transcript.md`; i
 .claude/skills/tf-review-findings/    reviewer checklist + reference/checklist.md, severity scale
 .claude/settings.json                 allow-list (wrapper + git) and deny-list (raw terraform, network, history rewrites)
 CLAUDE.md                             repository notes every session reads
-.github/workflows/tf-test-agent.yml   agent → verify / guard → report
+.github/workflows/tf-test-agent.yml   gate → agent → verify / guard → report
 .github/workflows/ci.yml              shellcheck, bats, actionlint, terraform verification on every PR
-scripts/                              tf.sh, changed-modules.sh, agent-prompt.sh, verify.sh, guard-agent-diff.sh,
-                                      render-report.sh, post-comment.sh, transcript-summary.sh, validate-report.py,
-                                      report.schema.json, run-agent-local.sh
-tests/scripts/*.bats                  51 tests for the scripts (fake terraform / fake gh)
+scripts/                              tf.sh, changed-modules.sh, agent-gate.sh, agent-prompt.sh, verify.sh,
+                                      guard-agent-diff.sh, render-report.sh, post-comment.sh, transcript-summary.sh,
+                                      validate-report.py, report.schema.json, run-agent-local.sh
+tests/scripts/*.bats                  63 tests for the scripts (fake terraform / fake gh)
 ```
 
 **Execution.** The workflow runs Claude Code with `--agent tf-test-engineer`, so the main session *is* the custom agent: its markdown body is the system prompt, its `skills:` list is preloaded into context, its `disallowedTools` removes `WebFetch`/`WebSearch`/`Agent`. The prompt from `scripts/agent-prompt.sh` carries only context — repository, PR number, base/head, the change JSON — and the procedure comes from the agent file, which walks the four skills in order:
@@ -99,7 +101,18 @@ Skills are plain markdown with frontmatter and are usable outside this agent: `/
 
 ### Pull request run (CI, PR #5)
 
-_To be filled from the workflow run of PR #5: decision, units, tests run, findings, cost; the transcript summary is in the job's step summary and the artifacts._
+The change: `modules/function-app` gets a `ftps_state` variable with a `validation` block and the default `Disabled`, replacing the hard-coded `AllAllowed`. One human commit (`10aac77`); nothing else.
+
+[Workflow run 38966166147](https://github.com/romankovsv/claudfide-agent-tf/actions/runs/38966166147) — `agent` 81 s end to end (Terraform, providers, sandbox and Claude Code set-up included; the Claude Code step itself 36 s), `verify` 25 s, `guard` 6 s, `report` 6 s; the whole workflow under two minutes.
+
+- `tf-change-analysis`: one unit, `modules/function-app`, change kind `defaults` → `updated` ("new variable with a validation and a changed default needs default, wiring and invalid-value assertions").
+- `tf-test-authoring` + `tf-test-verify`: three runs added to the existing suite — `ftps_is_disabled_by_default`, `ftps_state_is_forwarded_to_the_app`, `rejects_unknown_ftps_state` (`expect_failures`); 7/7 passing through `scripts/tf.sh`.
+- Commit `432b2d1` by `claude[bot]`, `test(function-app): cover ftps_state default, forwarding and validation`, pushed to the PR branch. `guard`: one file changed, `modules/function-app/tests/main.tftest.hcl` — OK. `verify`: all nine units green on the branch tip, 36 runs.
+- `tf-review-findings`: one `info` finding — the default moved from `AllAllowed` to `Disabled` and `stacks/data-platform` does not set the variable, so every environment changes on the next apply; suggestion to set `FtpsOnly` explicitly if any pipeline publishes over FTPS. Stated as checked (the agent grepped the stack), not guessed.
+- Limitations stated by the agent: plan-only mock tests show the value reaches `site_config` and the validation fires, not that Azure accepts it; the stack was not run.
+- Cost: the identical change run locally (`make agent`) took 20 turns, 66 s and $0.18; the CI run used the same model and tool budget.
+
+What the sticky comment looks like is in the PR itself. An [earlier run](https://github.com/romankovsv/claudfide-agent-tf/actions/runs/38965702614) on the same PR shows the fail-safe path: the sandbox tooling on the runner was incomplete, the agent reported `blocked`, committed nothing, and the comment still carried the independent verification of the untouched branch.
 
 ## 5. What the tests can and cannot show
 
@@ -126,6 +139,15 @@ They **cannot** show: anything the Azure API decides (SKU availability, global n
 - Fork pull requests are not handled.
 - Raw CI logs are needed for deep debugging; the transcript summary omits tool outputs on purpose.
 - Lock files were added for the five modules that lacked them (`terraform providers lock`, linux + darwin); the three original lock files were left as shipped.
+- Commits by the agent are not signed (`use_commit_signing` is off); GitHub shows them as unverified.
+
+### Billing path of the GitHub Action
+
+The first CI runs failed with HTTP 400 `Credit balance is too low` from the Messages API although the same key had credits and the very same request succeeded from `curl` and from `claude -p` on a laptop. Narrowed down with throw-away workflow steps: Claude Code tags every request with a billing header that names its entrypoint, and it reports `claude-code-github-action` whenever `CLAUDE_CODE_ENTRYPOINT` or `CLAUDE_CODE_ACTION` is set (the action sets both). Requests with that entrypoint were rejected for this organisation; requests with any other entrypoint went through. The workflow therefore (1) runs a preflight call with the agent's model so a key or balance problem fails in one second with the API's own message, and (2) starts Claude Code through a two-line launcher that drops those two variables (`path_to_claude_code_executable`). The launcher changes nothing about what the agent can do; it only changes how the request is labelled. Both steps are marked as removable once the API accepts the action's entrypoint for the organisation. Debugging this is also where the "the action refuses to run when the workflow file differs from the default branch" rule bit: every experiment had to be merged first.
+
+### Loop prevention, second attempt
+
+The first version skipped the agent job when `github.actor == 'claude[bot]'`. It never matched: GitHub attributes the push made by the Claude GitHub App to `github-actions[bot]`, and the run was only held back because GitHub asks a maintainer to approve workflow runs triggered by an app. Approving that run made the agent job start on its own commit; the action rejected the bot actor within seconds, the job failed, and the report job overwrote the agent's sticky comment with a failure notice. The fix is the `gate` job: a bot actor of any name skips the agent, and so does a head commit authored by `claude[bot]`, whoever triggered the run. The script is covered by eleven bats tests, including "approved by a human, actor still a bot" and "human commit on top of the agent's commit runs the agent again".
 
 ## 8. With many more modules, teams or repositories
 

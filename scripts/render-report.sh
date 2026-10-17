@@ -7,6 +7,7 @@
 #   --verify FILE     summary.md written by scripts/verify.sh (optional)
 #   --guard FILE      text output of scripts/guard-agent-diff.sh (optional)
 #   --status TEXT     agent step status: success | failure | skipped | cancelled
+#   --reason TEXT     why the agent was skipped (from scripts/agent-gate.sh)
 #   --run-url URL     link to the workflow run
 #   --head SHA        commit the results refer to
 #   --transcript FILE markdown from scripts/transcript-summary.sh, shown collapsed
@@ -20,13 +21,14 @@
 set -euo pipefail
 
 marker_name="tf-test-agent-report"
-report="" verify="" guard="" transcript="" status="unknown" run_url="" head=""
+report="" verify="" guard="" transcript="" status="unknown" reason="" run_url="" head=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --report) shift; report="$1" ;;
     --verify) shift; verify="$1" ;;
     --guard) shift; guard="$1" ;;
     --status) shift; status="$1" ;;
+    --reason) shift; reason="$1" ;;
     --run-url) shift; run_url="$1" ;;
     --head) shift; head="$1" ;;
     --marker) shift; marker_name="$1" ;;
@@ -91,7 +93,7 @@ if [[ "$valid_report" == true ]]; then
 else
   case "$status" in
     success)   echo "⚠️ The agent finished but did not return a readable report." ;;
-    skipped)   echo "⏭️ The agent did not run for this event (bot commit, draft PR, or \`tf-tests:skip\` label)." ;;
+    skipped)   echo "⏭️ The agent did not run for this event: ${reason:-bot commit, draft PR, or \`tf-tests:skip\` label}." ;;
     cancelled) echo "⏹️ The agent run was cancelled (superseded by a newer push)." ;;
     *)         echo "❌ The agent did not complete (status: \`$status\`). Nothing was committed on its behalf; check the workflow log." ;;
   esac

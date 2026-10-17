@@ -1,6 +1,9 @@
 # Terraform test agent — runs on pull requests that change Terraform code.
 #
 # Jobs:
+#   gate    decides whether the agent may run (scripts/agent-gate.sh): not on
+#           drafts, not with the tf-tests:skip label, not for bot actors and
+#           never on a head commit the agent made itself.
 #   agent   the custom Claude Code agent analyses the change, writes/updates
 #           tests, runs them through scripts/tf.sh, commits only green test
 #           files to the PR branch and returns a structured report.
@@ -12,11 +15,14 @@
 #   report  assembles verify + guard + the agent's report into one sticky
 #           PR comment, also when the agent failed, timed out or was skipped.
 #
-# Loop prevention: the agent's own push (claude[bot]) re-triggers this
-# workflow; the agent job is skipped for bot actors and the action itself
-# rejects bot triggers, so only verify/guard/report run on that commit.
-# Concurrency queues runs per PR instead of cancelling, so a report is never
-# lost between the agent's push and the comment.
+# Loop prevention: the agent's own push re-triggers this workflow. GitHub
+# attributes that run to `github-actions[bot]` (not `claude[bot]`), and an
+# approved or re-run workflow carries yet another actor, so the gate also
+# looks at who authored the head commit. On the agent's commit only
+# verify/guard/report run and the comment is a second, "verification only"
+# one, so the agent's report is not overwritten. Concurrency queues runs per
+# PR instead of cancelling, so a report is never lost between the agent's
+# push and the comment.
 name: Terraform test agent
 
 on:
@@ -37,13 +43,37 @@ env:
   TF_PLUGIN_CACHE_DIR: /home/runner/.terraform.d/plugin-cache
 
 jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      run_agent: ${{ steps.decide.outputs.run_agent }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - name: Check out the pull request head commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+
+      - name: Decide whether the agent may run
+        id: decide
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          scripts/agent-gate.sh --actor "$ACTOR" --triggering-actor "$TRIGGERING_ACTOR" \
+            --draft "$DRAFT" --labels "$LABELS" --head HEAD | tee -a "$GITHUB_OUTPUT"
+
   agent:
     name: agent
-    if: >-
-      github.event.pull_request.draft == false &&
-      github.actor != 'claude[bot]' &&
-      github.triggering_actor != 'claude[bot]' &&
-      !contains(github.event.pull_request.labels.*.name, 'tf-tests:skip')
+    needs: gate
+    if: needs.gate.outputs.run_agent == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -296,7 +326,7 @@ jobs:
 
   report:
     name: report
-    needs: [agent, verify, guard]
+    needs: [gate, agent, verify, guard]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -322,6 +352,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           AGENT_RESULT: ${{ needs.agent.result }}
           AGENT_OUTCOME: ${{ needs.agent.outputs.outcome }}
+          GATE_REASON: ${{ needs.gate.outputs.reason }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -333,6 +364,7 @@ jobs:
             *) status="${AGENT_OUTCOME:-$AGENT_RESULT}"; marker="tf-test-agent-report" ;;
           esac
           args=(--status "$status" --marker "$marker" --run-url "$RUN_URL" --head "${HEAD:-}")
+          [[ -n "$GATE_REASON" ]] && args+=(--reason "$GATE_REASON")
           [[ -s artifacts/agent-report/report.json ]] && args+=(--report artifacts/agent-report/report.json)
           [[ -s artifacts/verify-results/summary.md ]] && args+=(--verify artifacts/verify-results/summary.md)
           [[ -s artifacts/guard-output/guard.txt ]] && args+=(--guard artifacts/guard-output/guard.txt)

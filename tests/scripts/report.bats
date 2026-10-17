@@ -70,6 +70,13 @@ EOF
   [[ "$output" == *"not available"* ]]
 }
 
+@test "shows the gate's reason when the agent was skipped" {
+  run scripts/render-report.sh --status skipped --reason "head commit abc1234 was made by the agent"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"did not run for this event: head commit abc1234 was made by the agent."* ]]
+  [[ "$output" == *"verification only"* ]]
+}
+
 @test "ignores a malformed report file" {
   echo '{"nope": true}' > bad.json
   run scripts/render-report.sh --report bad.json --status success
