@@ -54,6 +54,39 @@ run "creates_one_container_per_name" {
   }
 }
 
+run "blob_retention_follows_the_variable" {
+  command = plan
+
+  variables {
+    blob_delete_retention_days = 30
+  }
+
+  assert {
+    condition     = azurerm_storage_account.this.blob_properties[0].delete_retention_policy[0].days == 30
+    error_message = "Deleted blobs must be kept for the number of days requested."
+  }
+}
+
+run "rejects_retention_below_one_day" {
+  command = plan
+
+  variables {
+    blob_delete_retention_days = 0
+  }
+
+  expect_failures = [var.blob_delete_retention_days]
+}
+
+run "rejects_retention_above_365_days" {
+  command = plan
+
+  variables {
+    blob_delete_retention_days = 366
+  }
+
+  expect_failures = [var.blob_delete_retention_days]
+}
+
 run "rejects_invalid_name" {
   command = plan
 
