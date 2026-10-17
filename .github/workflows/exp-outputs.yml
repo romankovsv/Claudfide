@@ -31,8 +31,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "agent would run"
+  verify:
+    needs: agent
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo verify
+  guard:
+    needs: agent
+    if: always() && needs.agent.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo guard
   report:
-    needs: [gate, agent]
+    needs: [gate, agent, verify, guard]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -49,7 +61,7 @@ jobs:
           REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          EVENT_ACTION: ${{ github.event.action }}
         run: |
-          body="exp: event=${GITHUB_EVENT_NAME} actor=[$ACTOR] triggering_actor=[$TRIGGERING_ACTOR] agent_result=[$AGENT_RESULT] run_agent=[$RUN_AGENT] reason=[$GATE_REASON]"
+          body="exp2: event=${GITHUB_EVENT_NAME} action=${EVENT_ACTION} actor=[$ACTOR] triggering_actor=[$TRIGGERING_ACTOR] agent_result=[$AGENT_RESULT] run_agent=[$RUN_AGENT] reason=[$GATE_REASON]"
           gh api --method POST "repos/$REPO/issues/$PR_NUMBER/comments" -f body="$body" > /dev/null
-# exp
